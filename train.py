@@ -9,7 +9,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 from sklearn.metrics import confusion_matrix
-import cv2
+import csv
 
 import torch
 import torch.nn as nn
@@ -80,7 +80,6 @@ parser = argparse.ArgumentParser(description='LLD-MMRI 2023 Training')
 parser.add_argument('--data_dir', default='', type=str)
 parser.add_argument('--val_data_dir', default='', type=str)
 parser.add_argument('--train_anno_file', default='', type=str)
-parser.add_argument('--val_anno_file', default='', type=str)
 parser.add_argument('--train_transform_list', default=['random_crop',
                                                        'z_flip', 
                                                        'x_flip', 
@@ -238,7 +237,7 @@ parser.add_argument('--output', default='', type=str, metavar='PATH',
                     help='path to output folder (default: none, current dir)')
 parser.add_argument('--experiment', default='', type=str, metavar='NAME',
                     help='name of train experiment, name of sub-folder for output')
-parser.add_argument('--eval-metric', default=['f1', 'kappa'], type=str, nargs='+', metavar='EVAL_METRIC',
+parser.add_argument('--eval-metric', default="f1", type=str, nargs='+', metavar='EVAL_METRIC',
                     help='Main metric (default: "f1"')
 parser.add_argument('--report-metrics', default=['acc', 'f1', 'recall', 'precision', 'kappa'], 
                     nargs='+', choices=['acc', 'f1', 'recall', 'precision', 'kappa'], 
@@ -316,32 +315,12 @@ def main():
 
     random_seed(args.seed, args.rank)
 
-    # model = create_model(
-    #     args.model,
-    #     pretrained=args.pretrained,
-    #     num_classes=args.num_classes,
-    #     drop_rate=args.drop,
-    #     drop_path_rate=args.drop_path,
-    #     drop_block_rate=args.drop_block,
-    #     bn_momentum=args.bn_momentum,
-    #     bn_eps=args.bn_eps,
-    #     scriptable=args.torchscript,
-    #     checkpoint_path=args.initial_checkpoint) # baseline 无预训练
-    ## 加载预训练
     model = Merge_uniformer_Base(pretrained=args.pretrained,
                                 num_head=args.num_classes,
                                 num_phase=8,
                                 drop_rate=args.drop,
                                 drop_path_rate=args.drop_path,
                                 return_visualization=True)
-    # model = Merge_uniformer_Mul(pretrained=args.pretrained,
-    #                         num_head=args.num_classes,
-    #                         drop_rate=args.drop,
-    #                         drop_path_rate=args.drop_path)
-    # model = VideoMAE_model(num_phase=8, num_classes=args.num_classes)
-    # model = VideoMAE_tune_model(num_phase=8, num_clsses=args.num_classes)
-    # model = resnet50_pre(img_size=args.crop_size, num_class=args.num_classes)
-    # model = TMC(num_classes=args.num_classes, num_view=8, args=args)
 
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
@@ -442,14 +421,6 @@ def main():
 
     # create the train and eval datasets/dataloader
     dataset_train = MultiPhaseLiverDataset(args, is_training=True)
-    # dataset_train = MultiPhaseLiverDataset_slice(args, is_training=True)
-    # dataset_train = MultiPhaseLiverDataset_withsobel(args, is_training=True)
-
-    dataset_eval = MultiPhaseLiverDataset(args, is_training=False)
-    # dataset_eval = MultiPhaseLiverDataset_withsobel(args, is_training=False)
-    # dataset_train = MultiPhaseLiverDataset_withglobal(args, is_training=True)
-
-    # dataset_eval = MultiPhaseLiverDataset_withglobal(args, is_training=False)
 
     loader_train = create_loader(dataset_train, 
                                  batch_size=args.batch_size,
@@ -458,14 +429,6 @@ def main():
                                  distributed=args.distributed,
                                  pin_memory=args.pin_mem,
                                  mode='sqrt')
-    
-    loader_eval = create_loader(dataset_eval, 
-                                batch_size=args.batch_size,
-                                is_training=False,
-                                num_workers=args.workers,
-                                distributed=args.distributed,
-                                pin_memory=args.pin_mem, 
-                                collate_fn=collate_fn_eval_train)
 
     ## sample [50, 37, 34, 32, 34, 29, 100]
     sample = torch.tensor([50, 37, 34, 32, 34, 29, 100])
@@ -477,16 +440,8 @@ def main():
         else:
             train_loss_fn = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
     else:
-        # train_loss_fn = nn.CrossEntropyLoss()
-        # train_loss_fn = FocalLossWithSmoothing(args.num_classes)
         train_loss_fn = ClassBalancedLoss(samples_per_class=sample, num_classes=args.num_classes, is_smoothing=False)
-        # train_loss_fn = TMC_loss(num_classes=args.num_classes, num_view=8, lambda_epoches=50)
-        # train_loss_fn = nn.CrossEntropyLoss(weight=weight)
-        # train_loss_fn = models.MultiLabelLoss(weight_radio = True)
     train_loss_fn = train_loss_fn.cuda()
-    # validate_loss_fn = FocalLossWithSmoothing(args.num_classes).cuda()
-    validate_loss_fn = ClassBalancedLoss(samples_per_class=sample, num_classes=args.num_classes, is_smoothing=False)
-    # validate_loss_fn = TMC_loss(num_classes=args.num_classes, num_view=8, lambda_epoches=50)
 
     # setup checkpoint saver and eval metric tracking
     eval_metric = args.eval_metric
@@ -495,8 +450,6 @@ def main():
     saver = None
     metric_savers = None
     output_dir = None
-
-    early_stopping = EarlyStopping()
 
     if args.rank == 0:
         if args.experiment:
@@ -548,26 +501,11 @@ def main():
                     _logger.info("Distributing BatchNorm running means and vars")
                 distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
-            eval_metrics, labels, predictions, inputs, visualizations, eval_img_path = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, epoch=epoch)
-
-            if model_ema is not None and not args.model_ema_force_cpu:
-                if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-                    distribute_bn(model_ema, args.world_size, args.dist_bn == 'reduce')
-                ema_eval_metrics, labels, predictions, inputs, visualizations, eval_img_path = validate(
-                    model_ema.module, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, log_suffix=' (EMA)')
-                eval_metrics = ema_eval_metrics
+            train_metrics.pop('lr')
+            eval_metrics = train_metrics
 
             if lr_scheduler is not None:
-                if isinstance(eval_metric, list):
-                    eval_metric_value = 0
-                    all_value = [eval_metrics[i] for i in eval_metric]
-                    for i in all_value:
-                        eval_metric_value += i
-                    eval_metric_value /= len(all_value)
-                    lr_scheduler.step(epoch + 1, eval_metric_value)
-                # step LR for next epoch
-                else:
-                    lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
+                lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
 
             if output_dir is not None:
                 update_summary(
@@ -577,59 +515,28 @@ def main():
             if metric_savers is not None:
                 # Save the best checkpoint for this metric
                 for metric in args.report_metrics:
-                    if best_metrics[metric]['value'] is None or (eval_metrics[metric] > best_metrics[metric]['value']):
+                    if 80<epoch<200 and epoch%10==0:
                         best_metrics[metric]['value'] = eval_metrics[metric]
                         best_metrics[metric]['epoch'] = epoch
                         ckpt_saver = metric_savers[metric]
+                        path = os.path.join(output_dir, f'{epoch}.pth')
                         ckpt_saver.save_checkpoint(epoch, metric=best_metrics[metric]['value'])
 
             if saver is not None:
-                if isinstance(eval_metric, list):
-                    eval_metric_value = 0
-                    all_value = [eval_metrics[i] for i in eval_metric]
-                    for i in all_value:
-                        eval_metric_value += i
-                    eval_metric_value /= len(all_value)
-                    save_metric = eval_metric_value
-                else:
                 # save proper checkpoint with eval metric
-                    save_metric = eval_metrics[eval_metric]
+                save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
-                if best_metric != best_metric_:
-                    best_metric_ = best_metric
-                    best_eval_metric = eval_metrics 
-                    best_eval_prediction = predictions.argmax(1)
-                    eval_label = labels
-                    predictions_high_confidence, label_high_confidence, label_low_confidence = confident_choose(predictions, labels)
-                    # attention_visualization(input=inputs, visualizations=visualizations)
-                    _logger.info("Best F1 Score!")
-
-                    error_index_list = np.where((best_eval_prediction == labels)==False)[0].tolist()
-                    error_path_list = [eval_img_path[error_index] for error_index in error_index_list]
-
-            # early_stopping(eval_metrics['loss'], train_metrics['loss'], model)
-            # if early_stopping.early_stop:
-            #     _logger.info("Early Stopping!")
-            #     break
 
     except KeyboardInterrupt:
         pass
     # with open('error.json', 'w') as j:
     #     json.dump(error_img_path, j)
     if best_metric is not None:
-        _logger.info('*** Best metric: {0} (epoch {1})'.format(best_eval_metric, best_epoch))
-        confuse_mat = confusion_matrix(eval_label, best_eval_prediction)
-        _logger.info('confusion_matrix: \n{0}'.format(confuse_mat))
-        if predictions_high_confidence is not None:
-            confuse_mat_high_confidence = confusion_matrix(label_high_confidence, predictions_high_confidence.argmax(1))
-            _logger.info('confusion_matrix_high_confidence:\n{0}'.format(confuse_mat_high_confidence))
-            _logger.info('label_low_confidence:{0}'.format(label_low_confidence))
-        _logger.info('prediction: {0}'.format(best_eval_prediction))
-        _logger.info('label: {0}'.format(eval_label))
-        # with open("hardsamplesid_test_gridmask.txt", 'w') as t:
-        #     for error_path in error_path_list:
-        #         t.writelines(error_path+'\n')
-        #     t.close()
+        _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
+        with open(os.path.join(output_dir, 'summary.csv'),'a',newline='') as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(['lowest loss-epoch'])
+            writer.writerow(['*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch)])
 
 def train_one_epoch(
         epoch, model, loader, optimizer, loss_fn, args,
@@ -730,89 +637,6 @@ def train_one_epoch(
 
     return OrderedDict([('lr', lr), ('loss', losses_m.avg)])
 
-@torch.no_grad()
-def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='', epoch=1):
-    model.eval()
-    predictions = []
-    labels = []
-    inputs = []
-    eval_img_path = []
-    visualizations = []
-    error_img_paths = {}
-    error_img_paths['path'] = []
-    last_idx = len(loader) - 1
-    for batch_idx, eval_data in enumerate(loader):
-        last_batch = batch_idx == last_idx
-        input = eval_data['img'].cuda()
-        img_path = eval_data['img_path']
-        target = eval_data['label'].cuda()
-        batch_size = input.size(0)
-    # for batch_idx, (input, target) in enumerate(loader):
-    #     last_batch = batch_idx == last_idx
-    #     input = input.cuda()
-    #     target = target.cuda()
-    #     batch_size = input.size(0)
-
-        with amp_autocast():
-            output, visualization_head = model(input)
-            loss = loss_fn(output, target)
-            # # TMC
-            # evidence, evidence_a, alpha, alpha_a = model(input)
-            # loss = loss_fn(alpha, alpha_a, target, global_step=epoch)
-        if isinstance(output, (tuple, list)):
-            output = output[0]
-        predictions.append(output)
-        eval_img_path.extend(img_path)
-        labels.append(target)
-        inputs.append(input)
-        visualizations.append(visualization_head)
-    inputs = torch.cat(inputs, dim=0)
-    visualizations = np.concatenate(visualizations, axis=0)
-    
-        # gap = output.argmax(1) - target
-        # for one_batch in range(batch_size):
-        #     if abs(gap[one_batch]) > 1.0:
-        #         error_img_paths['path'].append(eval_data['img_path'][one_batch])
-
-    evaluation_metrics, outputs, targets = compute_metrics(predictions, labels, loss_fn, args)
-    if args.local_rank == 0:
-        output_str = 'Test:\n'
-        for key, value in evaluation_metrics.items():
-            output_str += f'{key}: {value}\n'
-        _logger.info(output_str)
-
-    return evaluation_metrics, targets, outputs, inputs, visualizations, eval_img_path
-
-
-def compute_metrics(outputs, targets, loss_fn, args):
-    
-    outputs = torch.cat(outputs, dim=0).detach()
-    targets = torch.cat(targets, dim=0).detach()
-
-    if args.distributed:
-        outputs = gather_data(outputs)
-        targets = gather_data(targets)
-
-    loss = loss_fn(outputs, targets).cpu().item()
-    outputs = outputs.cpu().numpy()
-    targets = targets.cpu().numpy()
-    acc = ACC(outputs, targets)
-    f1 = F1_score(outputs, targets)
-    recall = Recall(outputs, targets)
-    # specificity = Specificity(outputs, targets)
-    precision = Precision(outputs, targets)
-    kappa = Cohen_Kappa(outputs, targets)
-    metrics = OrderedDict([
-        ('loss', loss),
-        ('acc', acc),
-        ('f1', f1),
-        ('recall', recall),
-        ('precision', precision),
-        ('kappa', kappa),
-    ])
-        
-    return metrics, outputs, targets
-
 
 def gather_data(input):
     '''
@@ -823,63 +647,6 @@ def gather_data(input):
     output = torch.cat(output_list, dim=0)
     return output
 
-def confident_choose(predictions, label):
-    """
-    显示置信度高于line的分类结果
-    predictions [num_sample, 7] 
-    label [num_sample, 1]
-    """
-    num_sample, num_classes = predictions.shape
-    softmax = nn.Softmax(dim=1)
-    predictions = softmax(torch.tensor(predictions))
-    predictions = predictions.tolist()
-    index_list = []
-    index_list_low_confidence = []
-    for i, prediction in enumerate(predictions):
-        if max(prediction) > 0.70:
-            index_list.append(i)
-        else:
-            index_list_low_confidence.append(i)
-    predictions_high_confidence = torch.tensor(predictions)[index_list]
-    label_high_confidence = label[index_list]
-    label_low_confidence = label[index_list_low_confidence]
-    if len(index_list) == 0:
-        return None, None, None
-    else:
-        return predictions_high_confidence.numpy(), label_high_confidence, label_low_confidence
-    # return predictions_high_confidence, label_high_confidence, label_low_confidence
-
-def attention_visualization(input, visualizations):
-    multi_head_attn_map = visualizations #N,head_num,Z,H,W
-    if os.getcwd().split('/')[-1] == 'main':
-        path = "visualization_attn/"
-    else:
-        path = "main/visualization_attn/"
-    for img_idx in range(input.shape[0]):
-        for modal in range(input.shape[1]):
-            cur_img = input[img_idx][modal] # Z,H,W
-            for head in range(multi_head_attn_map.shape[1]):
-                cur_head_attn_map = multi_head_attn_map[img_idx][head] # Z,H,W
-                Z, H, W = cur_head_attn_map.shape
-                cur_head_attn_map = torch.from_numpy(cur_head_attn_map).unsqueeze(0).unsqueeze(0)
-                cur_head_attn_map = F.interpolate(cur_head_attn_map, size=(input.shape[2], H, W), 
-                                mode='trilinear', align_corners=True).squeeze(0).squeeze(0)
-
-                for z in range(input.shape[2]):
-                    cur_img_z = cur_img[z]
-                    cur_img_z = cur_img_z.cpu().numpy()
-                    cur_img_z = np.repeat(cur_img_z[:, :, np.newaxis], 3, axis=-1)
-                    cur_img_z = (cur_img_z-cur_img_z.min())/(cur_img_z.max()-cur_img_z.min())
-                    cur_img_z = (cur_img_z * 255).astype(np.uint8)
-                    mask = to_pil_image(cur_head_attn_map[z], mode='F')
-                    cmap = cm.get_cmap('jet')
-                    overlay = mask.resize(cur_img_z.shape[:2], resample=Image.BICUBIC)
-                    overlay = (255 * cmap(np.asarray(overlay) ** 2)[:, :, :3]).astype(np.uint8).transpose(1,0,2)[:,:,::-1]
-
-                    out_img = cur_img_z*0.5+overlay*0.5
-
-                    concat_img = np.concatenate([cur_img_z,overlay,out_img],axis=1)
-                    cv2.imwrite(path + 'att_imgid_%s_headnum_%s_z_%s.jpg'%(img_idx,head,z),concat_img)
 
 if __name__ == '__main__':
     torch.cuda.empty_cache()
