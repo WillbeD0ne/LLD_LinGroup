@@ -1,6 +1,7 @@
 # LLD-MMRI2023_LinGroup
 The code of LLD-MMRI2023 competition:
 *https://github.com/LMMMEng/LLD-MMRI2023*
+
 Competition team: LinGroup
 
 ## Data Preparation
@@ -18,7 +19,7 @@ In order to alleviate the preblem of overfitting, we use the pretrained model of
 The pretrained model for uniformer can be found in:
 *https://github.com/Sense-X/UniFormer/tree/main/video_classification*
 
-We choose model `uniformer_base_k400_16x4` weight and save it on fold [pretrain_model](https://github.com/LLD_LinGroup/pretrain_model)
+We choose model `uniformer_base_k400_16x4` weight and save it on fold [pretrain_model](https://github.com/WillbeD0ne/LLD_LinGroup/pretrain_model)
 
 
 ## Train
