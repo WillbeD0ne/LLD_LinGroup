@@ -16,10 +16,7 @@ from timm.models.layers import trunc_normal_, DropPath, to_2tuple
 layer_scale = False
 init_value = 1e-6
 
-if os.getcwd().split('/')[-1] == 'main':
-    pretrained_path = 'pretrain_model/uniformer_small_k400_8x8.pth'
-else:
-    pretrained_path = 'main/pretrain_model/uniformer_small_k400_8x8.pth'
+pretrained_path = 'pretrain_model/uniformer_small_k400_8x8.pth'
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
