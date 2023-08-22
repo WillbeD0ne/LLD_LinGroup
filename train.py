@@ -54,7 +54,6 @@ from metrics import *
 from datasets.mp_liver_dataset import MultiPhaseLiverDataset, create_loader, collate_fn_eval, collate_fn_eval_train, MultiPhaseLiverDataset_resample, MultiPhaseLiverDataset_slice
 import models
 from models import Merge_uniformer, Merge_uniformer_Mul, VideoMAE_model, Merge_uniformer_Base
-from earlystopping import EarlyStopping
 from loss.focal_loss import FocalLoss, FocalLossWithSmoothing
 from loss.cb_loss import ClassBalancedLoss
 
