@@ -50,7 +50,6 @@ parser.add_argument('--img_size', default=(16, 128, 128),
 parser.add_argument('--crop_size', default=(14, 112, 112),
                     type=int, nargs='+', help='cropped image size.')
 parser.add_argument('--val_data_dir', default='./images/', type=str)
-parser.add_argument('--val_anno_file', default='./labels/test.txt', type=str)
 parser.add_argument('--val_transform_list',
                     default=['center_crop'], nargs='+', type=str)
 parser.add_argument('--model', '-m', metavar='NAME', default='resnet50',
