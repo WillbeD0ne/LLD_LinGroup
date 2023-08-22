@@ -110,7 +110,6 @@ class GridMask(nn.Module):
         mask = Image.fromarray(np.uint8(mask))
         mask = mask.rotate(r)
         mask = np.asarray(mask)
-#        mask = 1*(np.random.randint(0,3,[hh,ww])>0)
         mask = mask[(hh-H)//2:(hh-H)//2+H, (ww-W)//2:(ww-W)//2+W]
 
         mask = torch.tensor(mask)
